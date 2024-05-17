@@ -1,5 +1,6 @@
 package com.hmdp.service.impl;
 
+import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.hmdp.dto.Result;
@@ -31,19 +32,35 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Override
     public Result queryById(Long id) {
+        // 缓存穿透
+//        Shop shop = queryWithPassThrough(id);
+
+        Shop shop = queryWithMutex(id);
+        //互斥锁解决缓存击穿
+        if(shop == null){
+            return Result.fail("店铺不存在");
+        }
+
+        return Result.ok(shop);
+    }
+
+
+    /**
+     * 解决缓存穿透
+     * */
+    public Shop queryWithPassThrough(Long id){
         // 1.从redis查询店铺信息
         String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
 
         //2.判断是否存在
         if(StrUtil.isNotBlank(shopJson)){
             //3.存在则直接返回
-            Shop shop = JSONUtil.toBean(shopJson, Shop.class);
-            return Result.ok(shop);
+            return JSONUtil.toBean(shopJson, Shop.class);
         }
 
         // 判断命中是否空值
         if(shopJson != null){   // 空值是空字符串"",不等于null
-            return Result.fail("店铺不存在");
+            return null;
         }
 
         Shop shop = getById(id);
@@ -52,12 +69,85 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             //【解决缓存穿透】将空值写入redis
             stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
             //5.数据库不存在则返回错误
-            return Result.fail("店铺不存在");
+            return null;
         }
 
         //6.数据库存在则存入redis,shop信息转为json格式
         stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id, JSONUtil.toJsonStr(shop), CACHE_SHOP_TTL, TimeUnit.MINUTES);
-        return Result.ok(shop);
+        return shop;
+
+    }
+
+    /**
+     * 获取锁
+     * */
+    private boolean tryLock(String key){
+        Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 10, TimeUnit.SECONDS);
+        return BooleanUtil.isTrue(flag);
+
+    }
+
+    /**
+     * 释放锁
+     * */
+    private void unLock(String key){
+        stringRedisTemplate.delete(key);
+    }
+
+    /**
+     * 解决缓存击穿
+     * */
+    public Shop queryWithMutex(Long id){
+        // 1.从redis查询店铺信息
+        String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
+
+        //2.判断是否存在
+        if(StrUtil.isNotBlank(shopJson)){
+            //3.存在则直接返回
+            return JSONUtil.toBean(shopJson, Shop.class);
+        }
+
+        // 判断命中是否空值
+        if(shopJson != null){   // 空值是空字符串"",不等于null
+            return null;
+        }
+
+        //4.实现缓存重建
+        //4.1获取互斥锁
+        String lockKey = LOCK_SHOP_KEY + id;
+        Shop shop = null;
+        try {
+            boolean isLock = tryLock(lockKey);
+            //4.2判断是否获取成功
+            if(!isLock){
+                //4.3失败，则休眠并重试
+                Thread.sleep(50);
+                return queryWithMutex(id);
+            }
+            //4.4 成功
+            shop = getById(id);
+
+            //模拟重建延时
+            Thread.sleep(200);
+
+            //5.不存在则根据id查数据库
+            if (shop == null){
+                //【解决缓存穿透】将空值写入redis
+                stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
+                //5.数据库不存在则返回错误
+                return null;
+            }
+
+            //6.数据库存在则存入redis,shop信息转为json格式
+            stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id, JSONUtil.toJsonStr(shop), CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        } catch (InterruptedException e){
+            throw new RuntimeException(e);
+        }finally {
+            //7.释放锁
+            unLock(lockKey);
+        }
+        return shop;
+
     }
 
 
@@ -80,6 +170,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
         return Result.ok();
     }
+
+
+
 
 
 
