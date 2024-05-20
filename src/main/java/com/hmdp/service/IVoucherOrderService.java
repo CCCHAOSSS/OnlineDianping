@@ -17,5 +17,5 @@ public interface IVoucherOrderService extends IService<VoucherOrder> {
     /**
      * 代理对象
      * */
-    Result createVoucherOrder(Long voucherId);
+    void createVoucherOrder(VoucherOrder voucherOrder);
 }
