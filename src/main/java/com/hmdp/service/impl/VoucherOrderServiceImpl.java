@@ -2,36 +2,30 @@ package com.hmdp.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import com.hmdp.dto.Result;
-import com.hmdp.entity.SeckillVoucher;
 import com.hmdp.entity.VoucherOrder;
 import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
-import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 /**
  * <p>
@@ -77,7 +71,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         public void run() {
             while (true) {
                 try {
-                    //1.获取消息队列中的订单信息 XREADGROUP GROUP g1 c1 COUNT 1 BLOCK 2000 STREAMS stream.order >
+                    //1.获取消息队列中的订单信息 XREADGROUP GROUP g1 c1 COUNT 1 BLOCK 2000 STREAMS s1 >
                     List<MapRecord<String, Object, Object>> list = stringRedisTemplate.opsForStream().read(
                             Consumer.from("g1", "c1"),
                             StreamReadOptions.empty().count(1).block(Duration.ofSeconds(2)),
@@ -95,13 +89,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     Map<Object, Object> values = record.getValue();
                     VoucherOrder voucherOrder = BeanUtil.fillBeanWithMap(values, new VoucherOrder(), true);
 
-
-                    //3.创建订单
+                    //4.创建订单
                     handleVoucherOrder(voucherOrder);
-//                    createVoucherOrder(voucherOrder);
-                    //4.ACK确认
-                    stringRedisTemplate.opsForStream().acknowledge(queueName, "g1", record.getId());
 
+                    //5.ACK确认
+                    stringRedisTemplate.opsForStream().acknowledge(queueName, "g1", record.getId());
                 } catch (Exception e) {
                     log.error("处理订单异常", e);
                     handlePendingList();    //处理异常的消息
@@ -112,13 +104,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         private void handlePendingList() {
             while (true) {
                 try {
-                    //1.获取消息队列中的订单信息 XREADGROUP GROUP g1 c1 COUNT 1 STREAMS stream.order 0>
+                    //1.获取pendinglist的订单信息 XREADGROUP GROUP g1 c1 COUNT 1 STREAMS  stream.orders 0
                     // LOCK 2000 STREAMS stream.orders >
                     List<MapRecord<String, Object, Object>> list = stringRedisTemplate.opsForStream().read(
                             Consumer.from("g1", "c1"),
                             StreamReadOptions.empty().count(1),
                             StreamOffset.create(queueName, ReadOffset.from("0"))
-
                     );
 
                     //2.判断消息获取是否成功
@@ -133,15 +124,15 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     VoucherOrder voucherOrder = BeanUtil.fillBeanWithMap(values, new VoucherOrder(), true);
 
                     //3.成功，可以下单
-                    createVoucherOrder(voucherOrder);
+                    handleVoucherOrder(voucherOrder);
                     //4.ACK确认
                     stringRedisTemplate.opsForStream().acknowledge(queueName, "g1", record.getId());
                 } catch (Exception e) {
                     log.error("处理pending-list订单异常", e);
                     try {
-                        Thread.sleep(20);
+                        Thread.sleep(50);
                     } catch (InterruptedException ex) {
-                        throw new RuntimeException(ex);
+                        ex.printStackTrace();
                     }
                 }
             }
