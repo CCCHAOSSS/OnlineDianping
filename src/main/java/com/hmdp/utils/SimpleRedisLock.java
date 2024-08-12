@@ -59,7 +59,7 @@ public class SimpleRedisLock implements ILock{
 //    }
 
     /**
-     * 基于Lua脚本释放锁
+     * 基于Lua脚本释放锁，就是把判断标识和释放锁写到了脚本里
      * */
     @Override
     public void unLock(){

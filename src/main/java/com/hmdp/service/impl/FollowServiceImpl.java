@@ -42,7 +42,7 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
             Follow follow = new Follow();
             follow.setUserId(userId);
             follow.setFollowUserId(followUserId);
-            boolean isSuccess = save(follow);
+            boolean isSuccess = save(follow);   //数据库中操作
             if (isSuccess) {
                 // 把关注用户的id，放入redis的set集合 sadd userId followerUserId
                 stringRedisTemplate.opsForSet().add(key, followUserId.toString());
